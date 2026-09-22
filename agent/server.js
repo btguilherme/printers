@@ -1,6 +1,6 @@
 /**
  * Universal Local Print Spooler Agent
- * Lightweight HTTP/WebSocket server for listing installed OS printers & printing RAW label commands.
+ * Lightweight HTTP server for listing installed OS printers & printing RAW label commands.
  * Compatible with Windows, Linux, and macOS.
  */
 
@@ -21,7 +21,7 @@ function execFilePromise(file, args, options = {}) {
   });
 }
 
-// Get list of installed printers from Operating System safely without shell execution
+// Get list of installed printers from Operating System safely
 async function getSystemPrinters() {
   const platform = os.platform();
   let printers = [];
@@ -59,7 +59,7 @@ async function getSystemPrinters() {
   return Array.from(new Set(printers));
 }
 
-// Print RAW command safely to OS printer queue
+// Print RAW command safely to OS printer queue using Win32 API winspool.drv on Windows
 async function printRawToPrinter(printerName, rawData) {
   const platform = os.platform();
   const validPrinters = await getSystemPrinters();
@@ -73,14 +73,63 @@ async function printRawToPrinter(printerName, rawData) {
 
   try {
     if (platform === 'win32') {
-      // Windows RAW spooling via PowerShell Win32 API / Print Spooler Byte Array
+      // Native Win32 Raw Spooling via PowerShell .NET C# P/Invoke wrapper
       const psScript = `
-        $printer = '${printerName.replace(/'/g, "''")}';
+        $printerName = '${printerName.replace(/'/g, "''")}';
         $file = '${tempFilePath.replace(/'/g, "''")}';
-        $bytes = [System.IO.File]::ReadAllBytes($file);
-        $cmd = "cmd.exe";
-        $args = "/c print /d:""$printer"" ""$file""";
-        Start-Process $cmd -ArgumentList $args -NoNewWindow -Wait;
+        $type = @"
+        using System;
+        using System.IO;
+        using System.Runtime.InteropServices;
+        public class Win32RawPrinter {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+            public class DOCINFOA {
+                [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+                [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+                [MarshalAs(UnmanagedType.LPStr)] public string pDatatype;
+            }
+            [DllImport("winspool.drv", EntryPoint = "OpenPrinterA", ExactSpelling = true, SetLastError = true)]
+            public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+            [DllImport("winspool.drv", ExactSpelling = true, SetLastError = true)]
+            public static extern bool ClosePrinter(IntPtr hPrinter);
+            [DllImport("winspool.drv", EntryPoint = "StartDocPrinterA", ExactSpelling = true, SetLastError = true)]
+            public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+            [DllImport("winspool.drv", ExactSpelling = true, SetLastError = true)]
+            public static extern bool EndDocPrinter(IntPtr hPrinter);
+            [DllImport("winspool.drv", ExactSpelling = true, SetLastError = true)]
+            public static extern bool StartPagePrinter(IntPtr hPrinter);
+            [DllImport("winspool.drv", ExactSpelling = true, SetLastError = true)]
+            public static extern bool EndPagePrinter(IntPtr hPrinter);
+            [DllImport("winspool.drv", ExactSpelling = true, SetLastError = true)]
+            public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+            public static bool SendFileToPrinter(string szPrinterName, string fileName) {
+                byte[] bytes = File.ReadAllBytes(fileName);
+                IntPtr hPrinter = IntPtr.Zero;
+                DOCINFOA di = new DOCINFOA();
+                di.pDocName = "RAW Label Job";
+                di.pDatatype = "RAW";
+                if (OpenPrinter(szPrinterName, out hPrinter, IntPtr.Zero)) {
+                    if (StartDocPrinter(hPrinter, 1, di)) {
+                        if (StartPagePrinter(hPrinter)) {
+                            IntPtr pUnmanagedBytes = Marshal.AllocCoTaskMem(bytes.Length);
+                            Marshal.Copy(bytes, 0, pUnmanagedBytes, bytes.Length);
+                            int dwWritten;
+                            bool bSuccess = WritePrinter(hPrinter, pUnmanagedBytes, bytes.Length, out dwWritten);
+                            Marshal.FreeCoTaskMem(pUnmanagedBytes);
+                            EndPagePrinter(hPrinter);
+                            EndDocPrinter(hPrinter);
+                            ClosePrinter(hPrinter);
+                            return bSuccess;
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+"@;
+        Add-Type -TypeDefinition $type -Language CSharp;
+        [Win32RawPrinter]::SendFileToPrinter($printerName, $file);
       `;
       await execFilePromise('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript]);
     } else {
