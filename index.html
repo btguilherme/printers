@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sistema Multi-Impressoras de Etiquetas (Zebra, Elgin, Argox, GoDEX, HPRT)</title>
+  <title>Sistema de Impressão de Etiquetas (Zebra, Elgin, Argox, GoDEX, HPRT)</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -13,62 +13,67 @@
       <span>🖨️ MultiBrand Thermal Label Printer</span>
       <span class="badge badge-info">Multi-Plataforma Client-Side</span>
     </h1>
-    <p>Solução client-side em JavaScript para descoberta e impressão direta de etiquetas em impressoras <strong>Zebra, Elgin, Argox, GoDEX, HPRT</strong> via Web Serial, WebUSB, Web Bluetooth, Rede ou Agente Local.</p>
+    <p>Impressão e listagem de impressoras instaladas no sistema ou na rede (Zebra, Elgin, Argox, GoDEX, HPRT) diretamente do navegador.</p>
   </header>
 
   <div class="grid-container">
 
-    <!-- Configuração e Conexão de Impressoras -->
+    <!-- Configuração e Seleção de Impressoras -->
     <div class="left-panel">
       <div class="card">
         <h2>
-          <span>1. Método de Conexão</span>
-          <span id="connectionStatus" class="badge badge-warning">Desconectado</span>
+          <span>1. Seleção de Impressora</span>
+          <span id="connectionStatus" class="badge badge-warning">Aguardando</span>
         </h2>
 
         <div class="form-group">
-          <label for="transportSelect">Interface da Impressora</label>
+          <label for="transportSelect">Modo de Comunicação</label>
           <select id="transportSelect" class="form-control">
-            <option value="webserial">Web Serial API (USB / Serial Direct)</option>
+            <option value="agent" selected>Impressoras Instaladas no Sistema Operacional (Agente Local)</option>
+            <option value="webserial">Web Serial API (Porta COM / USB Direct)</option>
             <option value="webusb">WebUSB API (USB Direct)</option>
-            <option value="bluetooth">Web Bluetooth (Sem fio / Mobile / Desktop)</option>
-            <option value="network">Rede IP Direct (TCP / REST / HTTP)</option>
-            <option value="agent">Agente Spooler Local (WebSocket / Driver de SO)</option>
+            <option value="bluetooth">Web Bluetooth (Sem fio / Mobile)</option>
+            <option value="network">Rede IP Direct (TCP / HTTP REST)</option>
           </select>
         </div>
 
-        <!-- Opções Dinâmicas por Transporte -->
-        <div id="transportOptionsContainer">
-          <!-- Network direct options -->
-          <div id="networkOptions" class="form-group" style="display:none;">
-            <label for="networkIp">Endereço IP da Impressora na Rede</label>
-            <input type="text" id="networkIp" class="form-control" placeholder="192.168.1.200" value="192.168.1.200">
-            <label for="networkPort" style="margin-top: 8px;">Porta</label>
-            <input type="number" id="networkPort" class="form-control" value="9100">
-          </div>
-
-          <!-- Local Agent Options -->
-          <div id="agentOptions" class="form-group" style="display:none;">
-            <label for="agentUrl">URL do Agente Local Spooler</label>
-            <input type="text" id="agentUrl" class="form-control" value="ws://127.0.0.1:8182/">
-            <button id="btnFetchAgentPrinters" class="btn btn-secondary" style="margin-top: 8px;">Listar Impressoras do Sistema Operacional</button>
+        <!-- Dropdown de Impressoras do Sistema (Agente Local) -->
+        <div id="osPrintersContainer" class="form-group">
+          <label for="osPrinterSelect"><strong>Impressora Selecionada (Instaladas no SO/Rede):</strong></label>
+          <select id="osPrinterSelect" class="form-control">
+            <option value="">🔄 Carregando impressoras do sistema...</option>
+          </select>
+          <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <button id="btnRefreshPrinters" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">
+              🔄 Atualizar Lista de Impressoras
+            </button>
           </div>
         </div>
 
-        <div class="btn-group">
-          <button id="btnDiscover" class="btn btn-primary">
-            🔍 Detectar / Adicionar Impressora
-          </button>
-          <button id="btnConnect" class="btn btn-secondary">
-            ⚡ Conectar Dispositivo
+        <!-- Opções Dinâmicas para Outros Transportes -->
+        <div id="networkOptions" class="form-group" style="display:none;">
+          <label for="networkIp">Endereço IP da Impressora na Rede</label>
+          <input type="text" id="networkIp" class="form-control" placeholder="192.168.1.200" value="192.168.1.200">
+          <label for="networkPort" style="margin-top: 8px;">Porta (RAW/AppSocket)</label>
+          <input type="number" id="networkPort" class="form-control" value="9100">
+        </div>
+
+        <div id="directDeviceAction" class="form-group" style="display:none;">
+          <button id="btnDiscoverDirect" class="btn btn-primary">
+            🔍 Selecionar Dispositivo Direto
           </button>
         </div>
 
-        <div style="margin-top: 15px;">
-          <label>Impressoras Encontradas / Selecionadas:</label>
-          <ul id="deviceList" class="device-list">
-            <li class="device-item text-muted">Nenhuma impressora selecionada</li>
-          </ul>
+        <!-- Banner de Alerta do Agente -->
+        <div id="agentWarning" class="card" style="display:none; background-color: #fef2f2; border-color: #fca5a5; padding: 12px; margin-top: 12px;">
+          <h3 style="font-size: 0.95rem; color: #991b1b; margin-bottom: 6px;">⚠️ Agente Local de Impressão Não Detectado</h3>
+          <p style="font-size: 0.85rem; color: #7f1d1d; margin-bottom: 8px;">
+            Para listar as impressoras instaladas no Windows, Linux ou macOS (incluindo impressoras compartilhadas na rede), execute o serviço local:
+          </p>
+          <code style="display: block; background: #fff; padding: 6px; border-radius: 4px; font-size: 0.8rem; color: #1e293b;">
+            node agent/server.js
+          </code>
+          <span style="font-size: 0.8rem; color: #475569; display: block; margin-top: 4px;">ou execute via Python: <code>python agent/server.py</code></span>
         </div>
       </div>
 
@@ -105,12 +110,12 @@
       </div>
     </div>
 
-    <!-- Pré-visualização do Código Raw ZPL/TSPL/PPLB e Envio -->
+    <!-- Código Raw ZPL/TSPL/PPLB e Envio -->
     <div class="right-panel">
       <div class="card">
         <h2>3. Código ZPL / Comando de Impressão</h2>
         <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
-          O código abaixo é gerado dinamicamente para a impressora selecionada. Você também pode editá-lo diretamente antes de enviar.
+          O código abaixo é gerado dinamicamente para a marca escolhida. Você pode alterá-lo livremente antes do envio.
         </p>
         <div class="form-group">
           <textarea id="rawCommandText" spellcheck="false"></textarea>
@@ -144,11 +149,14 @@
 
       // DOM Elements
       const transportSelect = document.getElementById('transportSelect');
+      const osPrintersContainer = document.getElementById('osPrintersContainer');
+      const osPrinterSelect = document.getElementById('osPrinterSelect');
+      const btnRefreshPrinters = document.getElementById('btnRefreshPrinters');
       const networkOptions = document.getElementById('networkOptions');
-      const agentOptions = document.getElementById('agentOptions');
-      const btnDiscover = document.getElementById('btnDiscover');
-      const btnConnect = document.getElementById('btnConnect');
-      const deviceList = document.getElementById('deviceList');
+      const directDeviceAction = document.getElementById('directDeviceAction');
+      const btnDiscoverDirect = document.getElementById('btnDiscoverDirect');
+      const agentWarning = document.getElementById('agentWarning');
+
       const connectionStatus = document.getElementById('connectionStatus');
       const rawCommandText = document.getElementById('rawCommandText');
       const btnPrint = document.getElementById('btnPrint');
@@ -183,150 +191,132 @@
         }
       }
 
-      // Handle transport choice change
+      // Auto load printers from OS Agent
+      async function loadOSPrinters() {
+        osPrinterSelect.innerHTML = '<option value="">🔄 Buscando impressoras instaladas no sistema...</option>';
+        agentWarning.style.display = 'none';
+
+        try {
+          const printers = await LabelPrinter.transports.LocalAgent.discoverPrinters();
+          if (printers && printers.length > 0) {
+            osPrinterSelect.innerHTML = '';
+            printers.forEach(p => {
+              const opt = document.createElement('option');
+              opt.value = p;
+              opt.textContent = p;
+              osPrinterSelect.appendChild(opt);
+            });
+            log(`Encontradas ${printers.length} impressoras instaladas no sistema operante.`, 'success');
+            connectionStatus.textContent = 'Agente Ativo';
+            connectionStatus.className = 'badge badge-success';
+            updateActiveTransport();
+          } else {
+            osPrinterSelect.innerHTML = '<option value="">Nenhuma impressora encontrada no sistema</option>';
+            log('Agente respondeu, mas nenhuma impressora foi encontrada.', 'error');
+          }
+        } catch (err) {
+          osPrinterSelect.innerHTML = '<option value="">Erro ao conectar ao Agente Local</option>';
+          agentWarning.style.display = 'block';
+          connectionStatus.textContent = 'Agente Desconectado';
+          connectionStatus.className = 'badge badge-warning';
+          log(err.message, 'error');
+        }
+      }
+
+      function updateActiveTransport() {
+        const mode = transportSelect.value;
+        if (mode === 'agent') {
+          const selectedPrinter = osPrinterSelect.value;
+          if (selectedPrinter) {
+            currentTransport = new LabelPrinter.transports.LocalAgent({ printerName: selectedPrinter });
+            log(`Impressora ativa do sistema: ${selectedPrinter}`);
+          }
+        } else if (mode === 'network') {
+          const ip = document.getElementById('networkIp').value;
+          const port = document.getElementById('networkPort').value;
+          currentTransport = new LabelPrinter.transports.Network(ip, { port });
+          log(`Modo de rede IP configurado: ${ip}:${port}`);
+        }
+      }
+
+      // Handle transport selection
       transportSelect.addEventListener('change', () => {
         const val = transportSelect.value;
+        osPrintersContainer.style.display = val === 'agent' ? 'block' : 'none';
         networkOptions.style.display = val === 'network' ? 'block' : 'none';
-        agentOptions.style.display = val === 'agent' ? 'block' : 'none';
+        directDeviceAction.style.display = (val === 'webserial' || val === 'webusb' || val === 'bluetooth') ? 'block' : 'none';
+
+        if (val === 'agent') {
+          loadOSPrinters();
+        } else {
+          agentWarning.style.display = 'none';
+          updateActiveTransport();
+        }
       });
 
-      // Handle brand selection
+      osPrinterSelect.addEventListener('change', updateActiveTransport);
+      btnRefreshPrinters.addEventListener('click', loadOSPrinters);
+
+      // Direct device selection
+      btnDiscoverDirect.addEventListener('click', async () => {
+        const method = transportSelect.value;
+        try {
+          if (method === 'webserial') {
+            log('Solicitando porta Serial / USB...');
+            currentTransport = await LabelPrinter.transports.WebSerial.requestDevice();
+            log(`Conectado ao dispositivo Serial: ${currentTransport.name}`, 'success');
+          } else if (method === 'webusb') {
+            log('Solicitando dispositivo WebUSB...');
+            currentTransport = await LabelPrinter.transports.WebUSB.requestDevice();
+            log(`Conectado ao dispositivo WebUSB: ${currentTransport.name}`, 'success');
+          } else if (method === 'bluetooth') {
+            log('Buscando dispositivo Bluetooth...');
+            currentTransport = await LabelPrinter.transports.WebBluetooth.requestDevice();
+            log(`Conectado ao dispositivo Bluetooth: ${currentTransport.name}`, 'success');
+          }
+          connectionStatus.textContent = 'Dispositivo Selecionado';
+          connectionStatus.className = 'badge badge-success';
+        } catch (err) {
+          log(`Erro na seleção direta: ${err.message}`, 'error');
+        }
+      });
+
+      // Handle brand choice
       brandChips.forEach(chip => {
         chip.addEventListener('click', () => {
           brandChips.forEach(c => c.classList.remove('active'));
           chip.classList.add('active');
           selectedBrand = chip.dataset.brand;
-          log(`Marca selecionada: ${LabelPrinter.generators[selectedBrand].name}`);
+          log(`Marca/Linguagem alterada para: ${LabelPrinter.generators[selectedBrand].name}`);
           updateGeneratedCommand();
         });
       });
 
-      // Recalculate command on input changes
+      // Input changes recalculate command
       [labelTitle, labelBarcode, labelQrCode, labelDetails].forEach(input => {
         input.addEventListener('input', updateGeneratedCommand);
       });
 
-      // Discovery button
-      btnDiscover.addEventListener('click', async () => {
-        const method = transportSelect.value;
-        try {
-          if (method === 'webserial') {
-            log('Solicitando dispositivo Web Serial...');
-            const transport = await LabelPrinter.transports.WebSerial.requestDevice();
-            currentTransport = transport;
-            renderDeviceList([{ type: 'Serial', name: transport.name, transport }]);
-            log(`Dispositivo Serial selecionado: ${transport.name}`, 'success');
-          } else if (method === 'webusb') {
-            log('Solicitando dispositivo WebUSB...');
-            const transport = await LabelPrinter.transports.WebUSB.requestDevice();
-            currentTransport = transport;
-            renderDeviceList([{ type: 'USB', name: transport.name, transport }]);
-            log(`Dispositivo WebUSB selecionado: ${transport.name}`, 'success');
-          } else if (method === 'bluetooth') {
-            log('Buscando dispositivos Bluetooth com perfis de impressora...');
-            const transport = await LabelPrinter.transports.WebBluetooth.requestDevice();
-            currentTransport = transport;
-            renderDeviceList([{ type: 'Bluetooth', name: transport.name, transport }]);
-            log(`Dispositivo Bluetooth selecionado: ${transport.name}`, 'success');
-          } else if (method === 'network') {
-            const ip = document.getElementById('networkIp').value;
-            const port = document.getElementById('networkPort').value;
-            const transport = new LabelPrinter.transports.Network(ip, { port });
-            currentTransport = transport;
-            renderDeviceList([{ type: 'Rede', name: transport.name, transport }]);
-            log(`Configurado envio de Rede para ${ip}:${port}`, 'success');
-          } else if (method === 'agent') {
-            const agentUrl = document.getElementById('agentUrl').value;
-            log(`Conectando ao Agente Local (${agentUrl})...`);
-            try {
-              const printers = await LabelPrinter.transports.LocalAgent.discoverPrinters(agentUrl);
-              if (printers.length > 0) {
-                const deviceItems = printers.map(p => ({
-                  type: 'Agente OS',
-                  name: p,
-                  transport: new LabelPrinter.transports.LocalAgent({ url: agentUrl, printerName: p })
-                }));
-                renderDeviceList(deviceItems);
-                log(`Encontradas ${printers.length} impressoras instaladas no sistema.`, 'success');
-              } else {
-                log('Agente local respondeu, mas nenhuma impressora foi informada.', 'error');
-              }
-            } catch (err) {
-              log(`Erro ao consultar agente local: ${err.message}`, 'error');
-            }
-          }
-        } catch (err) {
-          log(`Falha ao buscar/conectar impressora: ${err.message}`, 'error');
-        }
-      });
-
-      // Render device list
-      function renderDeviceList(items) {
-        deviceList.innerHTML = '';
-        items.forEach((item, index) => {
-          const li = document.createElement('li');
-          li.className = 'device-item' + (index === 0 ? ' active' : '');
-          li.innerHTML = `
-            <div>
-              <span class="status-indicator online"></span>
-              <strong>[${item.type}]</strong> ${item.name}
-            </div>
-            <span class="badge badge-success">Pronto</span>
-          `;
-          li.addEventListener('click', () => {
-            document.querySelectorAll('.device-item').forEach(el => el.classList.remove('active'));
-            li.classList.add('active');
-            currentTransport = item.transport;
-            log(`Impressora selecionada: ${item.name}`);
-          });
-          deviceList.appendChild(li);
-        });
-
-        if (items.length > 0) {
-          currentTransport = items[0].transport;
-          connectionStatus.textContent = 'Pronto para Uso';
-          connectionStatus.className = 'badge badge-success';
-        }
-      }
-
-      // Manual Connect button
-      btnConnect.addEventListener('click', async () => {
-        if (!currentTransport) {
-          log('Selecione ou adicione uma impressora primeiro.', 'error');
-          return;
-        }
-        try {
-          log('Testando conexão com a impressora...');
-          activePrinter = new LabelPrinter(currentTransport);
-          await activePrinter.connect();
-          connectionStatus.textContent = 'Conectado';
-          connectionStatus.className = 'badge badge-success';
-          log(`Conexão estabelecida com sucesso com ${currentTransport.name}!`, 'success');
-        } catch (err) {
-          log(`Erro na conexão: ${err.message}`, 'error');
-        }
-      });
-
-      // Print Button Action
+      // Print Button
       btnPrint.addEventListener('click', async () => {
         const cmdData = rawCommandText.value;
         if (!cmdData || cmdData.trim() === '') {
-          log('Nenhum comando ZPL/TSPL/PPLB para enviar.', 'error');
+          log('Nenhum comando de impressão informado.', 'error');
           return;
         }
 
         if (!currentTransport) {
-          log('Erro: Nenhuma impressora foi selecionada para o envio.', 'error');
+          log('Erro: Nenhuma impressora foi selecionada para envio.', 'error');
           return;
         }
 
         try {
-          log(`Enviando dados de impressão (${cmdData.length} bytes) via ${currentTransport.name}...`);
+          log(`Enviando etiqueta para [${currentTransport.name}]...`);
           activePrinter = new LabelPrinter(currentTransport);
           await activePrinter.print(cmdData);
-          log('Etiqueta enviada com sucesso para a impressora! 🚀', 'success');
+          log('Etiqueta enviada com sucesso para a fila de impressão! 🚀', 'success');
         } catch (err) {
-          log(`Falha ao enviar para a impressora: ${err.message}`, 'error');
+          log(`Falha na impressão: ${err.message}`, 'error');
         }
       });
 
@@ -334,9 +324,9 @@
         logTerminal.innerHTML = '';
       });
 
-      // Initial command display
+      // Initial setup
       updateGeneratedCommand();
-      log('Sistema inicializado e pronto.');
+      loadOSPrinters();
     });
   </script>
 </body>
