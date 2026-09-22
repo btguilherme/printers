@@ -1,7 +1,7 @@
 /**
  * MultiBrandLabelPrinter - Universal Client-Side Thermal Label Printing Library
  * Supports Zebra, Elgin, Argox, GoDEX, HPRT and other thermal printers
- * Interfaces: Web Serial, WebUSB, Web Bluetooth, Network Direct (TCP/HTTP/WebSocket), and Local Agent Bridge
+ * Interfaces: Local OS Spooler Bridge, Web Serial, WebUSB, Web Bluetooth, Network Direct (TCP/HTTP)
  */
 
 (function (global, factory) {
@@ -15,7 +15,6 @@
 }(typeof window !== 'undefined' ? window : this, function () {
   'use strict';
 
-  // Utility to convert String / Uint8Array to ArrayBuffer / Uint8Array
   function toUint8Array(data) {
     if (data instanceof Uint8Array) return data;
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -27,12 +26,61 @@
 
   // --- Transport Implementations ---
 
+  class LocalAgentTransport {
+    constructor(options = {}) {
+      this.baseUrl = options.baseUrl || 'http://127.0.0.1:8182';
+      this.printerName = options.printerName || null;
+    }
+
+    static async discoverPrinters(agentUrl = 'http://127.0.0.1:8182') {
+      const cleanUrl = agentUrl.replace(/\/$/, '');
+      try {
+        const response = await fetch(`${cleanUrl}/printers`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) {
+          throw new Error(`Servidor respondeu com status ${response.status}`);
+        }
+        const data = await response.json();
+        return data.printers || [];
+      } catch (err) {
+        throw new Error(`Não foi possível conectar ao Agente Local de Impressão (127.0.0.1:8182). Verifique se o agente está em execução: ${err.message}`);
+      }
+    }
+
+    async send(data) {
+      const payloadString = typeof data === 'string' ? data : new TextDecoder().decode(toUint8Array(data));
+      const response = await fetch(`${this.baseUrl}/print`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          printer: this.printerName,
+          data: payloadString
+        })
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.message || `Erro no Agente de Impressão (${response.status})`);
+      }
+
+      const result = await response.json();
+      if (result.status === 'error') {
+        throw new Error(result.message);
+      }
+      return result;
+    }
+
+    get name() {
+      return `OS Spooler (${this.printerName || 'Impressora Padrão do SO'})`;
+    }
+  }
+
   class WebSerialTransport {
     constructor(port, options = {}) {
       this.port = port;
       this.baudRate = options.baudRate || 9600;
-      this.writer = null;
-      this.reader = null;
     }
 
     static isSupported() {
@@ -41,7 +89,7 @@
 
     static async requestDevice(filters = []) {
       if (!WebSerialTransport.isSupported()) {
-        throw new Error('Web Serial API is not supported in this browser.');
+        throw new Error('Web Serial API não suportada neste navegador.');
       }
       const port = await navigator.serial.requestPort({ filters });
       return new WebSerialTransport(port);
@@ -60,16 +108,8 @@
     }
 
     async disconnect() {
-      if (this.writer) {
-        await this.writer.close();
-        this.writer = null;
-      }
-      if (this.reader) {
-        await this.reader.cancel();
-        this.reader = null;
-      }
       if (this.port) {
-        await this.port.close();
+        await this.port.close().catch(() => {});
       }
     }
 
@@ -86,7 +126,7 @@
 
     get name() {
       const info = this.port.getInfo ? this.port.getInfo() : {};
-      return `Serial Printer (USB Vendor ID: ${info.usbVendorId || 'N/A'}, Product ID: ${info.usbProductId || 'N/A'})`;
+      return `Serial/USB Direct (Vendor ID: ${info.usbVendorId || 'N/A'})`;
     }
   }
 
@@ -103,17 +143,11 @@
 
     static async requestDevice(vendorId) {
       if (!WebUSBTransport.isSupported()) {
-        throw new Error('WebUSB API is not supported in this browser.');
+        throw new Error('WebUSB API não é suportada neste navegador.');
       }
       const filters = vendorId ? [{ vendorId }] : [];
       const device = await navigator.usb.requestDevice({ filters });
       return new WebUSBTransport(device);
-    }
-
-    static async getGrantedDevices() {
-      if (!WebUSBTransport.isSupported()) return [];
-      const devices = await navigator.usb.getDevices();
-      return devices.map(dev => new WebUSBTransport(dev));
     }
 
     async connect() {
@@ -122,7 +156,6 @@
         await this.device.selectConfiguration(1);
       }
 
-      // Find printer interface (class 7) or fallback to first interface
       let targetInterface = this.device.configuration.interfaces.find(iface =>
         iface.alternates.some(alt => alt.interfaceClass === 7)
       ) || this.device.configuration.interfaces[0];
@@ -133,22 +166,7 @@
 
         const alt = targetInterface.alternates[0];
         const endpoint = alt.endpoints.find(e => e.direction === 'out');
-        if (endpoint) {
-          this.endpointOut = endpoint.endpointNumber;
-        } else {
-          this.endpointOut = 1; // Fallback
-        }
-      }
-    }
-
-    async disconnect() {
-      if (this.device.opened) {
-        try {
-          await this.device.releaseInterface(this.interfaceNumber);
-          await this.device.close();
-        } catch (e) {
-          console.warn('Error closing WebUSB device:', e);
-        }
+        this.endpointOut = endpoint ? endpoint.endpointNumber : 1;
       }
     }
 
@@ -157,10 +175,7 @@
         await this.connect();
       }
       const bytes = toUint8Array(data);
-      if (!this.endpointOut) {
-        throw new Error('No OUT endpoint found for WebUSB device');
-      }
-      await this.device.transferOut(this.endpointOut, bytes);
+      await this.device.transferOut(this.endpointOut || 1, bytes);
     }
 
     get name() {
@@ -180,15 +195,14 @@
 
     static async requestDevice() {
       if (!WebBluetoothTransport.isSupported()) {
-        throw new Error('Web Bluetooth is not supported in this browser.');
+        throw new Error('Web Bluetooth não é suportado neste navegador.');
       }
-      // Common thermal printer Bluetooth SPP / custom GATT services
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [
-          '00001101-0000-1000-8000-00805f9b34fb', // Serial Port Profile (SPP)
-          '49535343-fe7d-4ae5-8fa9-9fafd205e455', // Microchip / ISSC BLE
-          'e7810a71-73ae-499d-8c15-faa9aef0c3f2'  // Generic printer service
+          '00001101-0000-1000-8000-00805f9b34fb',
+          '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+          'e7810a71-73ae-499d-8c15-faa9aef0c3f2'
         ]
       });
       return new WebBluetoothTransport(device);
@@ -206,13 +220,7 @@
           }
         }
       }
-      throw new Error('No writable Bluetooth characteristic found on printer.');
-    }
-
-    async disconnect() {
-      if (this.device && this.device.gatt.connected) {
-        this.device.gatt.disconnect();
-      }
+      throw new Error('Nenhuma característica gravável de Bluetooth encontrada.');
     }
 
     async send(data) {
@@ -220,7 +228,6 @@
         await this.connect();
       }
       const bytes = toUint8Array(data);
-      // Bluetooth MTU chunking (default chunk 20-512 bytes)
       const chunkSize = 100;
       for (let i = 0; i < bytes.length; i += chunkSize) {
         const chunk = bytes.subarray(i, i + chunkSize);
@@ -241,119 +248,36 @@
     constructor(host, options = {}) {
       this.host = host;
       this.port = options.port || 9100;
-      this.protocol = options.protocol || 'http'; // http, ws, or raw relay endpoint
       this.endpoint = options.endpoint || `http://${this.host}:${this.port}/print`;
     }
 
     async send(data) {
       const bytes = toUint8Array(data);
-      if (this.protocol === 'ws') {
-        return new Promise((resolve, reject) => {
-          const wsUrl = this.endpoint.startsWith('ws') ? this.endpoint : `ws://${this.host}:${this.port}`;
-          const ws = new WebSocket(wsUrl);
-          ws.binaryType = 'arraybuffer';
-          ws.onopen = () => {
-            ws.send(bytes);
-            setTimeout(() => {
-              ws.close();
-              resolve();
-            }, 300);
-          };
-          ws.onerror = (err) => reject(new Error('WebSocket network print failed: ' + err));
-        });
-      } else {
-        // HTTP Raw POST (Direct REST/Printer IP Print Service)
-        const response = await fetch(this.endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
-          body: bytes,
-          mode: 'cors'
-        });
-        if (!response.ok) {
-          throw new Error(`Network HTTP print error: ${response.status} ${response.statusText}`);
-        }
+      const response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes
+      });
+      if (!response.ok) {
+        throw new Error(`Erro na conexão de rede HTTP: ${response.status}`);
       }
     }
 
     get name() {
-      return `Network Printer (${this.host}:${this.port})`;
-    }
-  }
-
-  class LocalAgentTransport {
-    constructor(options = {}) {
-      this.url = options.url || 'ws://127.0.0.1:8182/'; // Standard local agent WebSocket URL
-      this.printerName = options.printerName || null;
-      this.ws = null;
-    }
-
-    static async discoverPrinters(agentUrl = 'ws://127.0.0.1:8182/') {
-      return new Promise((resolve, reject) => {
-        const ws = new WebSocket(agentUrl);
-        const timeout = setTimeout(() => {
-          ws.close();
-          reject(new Error('Local print agent connection timeout'));
-        }, 3000);
-
-        ws.onopen = () => {
-          ws.send(JSON.stringify({ action: 'list_printers' }));
-        };
-
-        ws.onmessage = (evt) => {
-          clearTimeout(timeout);
-          ws.close();
-          try {
-            const data = JSON.parse(evt.data);
-            resolve(data.printers || []);
-          } catch (e) {
-            resolve([]);
-          }
-        };
-
-        ws.onerror = (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        };
-      });
-    }
-
-    async send(data) {
-      const payload = typeof data === 'string' ? data : new TextDecoder().decode(toUint8Array(data));
-      return new Promise((resolve, reject) => {
-        const ws = new WebSocket(this.url);
-        ws.onopen = () => {
-          ws.send(JSON.stringify({
-            action: 'print',
-            printer: this.printerName,
-            data: payload
-          }));
-        };
-        ws.onmessage = (evt) => {
-          ws.close();
-          resolve();
-        };
-        ws.onerror = (err) => {
-          reject(new Error('Local Agent print error: ' + err.message));
-        };
-      });
-    }
-
-    get name() {
-      return `Local Spooler Agent (${this.printerName || 'Default OS Printer'})`;
+      return `Rede IP (${this.host}:${this.port})`;
     }
   }
 
   // --- Command Template Generators for Brands ---
 
   const CommandGenerators = {
-    // Zebra (ZPL II / EPL2)
     zebra: {
       name: 'Zebra (ZPL II)',
       language: 'ZPL',
       generateLabel: ({ title, barcode, qrCode, details = [] }) => {
         let zpl = `^XA\n`;
-        zpl += `^PW800\n`; // Print width 80mm (~800 dots @ 203dpi)
-        zpl += `^LL400\n`; // Label length 40mm (~400 dots @ 203dpi)
+        zpl += `^PW800\n`;
+        zpl += `^LL400\n`;
         zpl += `^FO50,30^A0N,40,40^FD${title || 'ZEBRA LABEL TITLE'}^FS\n`;
 
         let y = 80;
@@ -377,7 +301,6 @@
       }
     },
 
-    // Elgin (TSPL / ZPL compatible models like L42, L42 Pro, L42 DT)
     elgin: {
       name: 'Elgin (TSPL / ZPL)',
       language: 'TSPL',
@@ -408,12 +331,10 @@
       }
     },
 
-    // Argox (PPLA / PPLB / PPLZ - e.g. OS-214plus, IX4)
     argox: {
       name: 'Argox (PPLB)',
       language: 'PPLB',
       generateLabel: ({ title, barcode, qrCode, details = [] }) => {
-        // PPLB (Eltron / Argox System II format)
         let pplb = `\nN\n`;
         pplb += `q800\n`;
         pplb += `Q400,24\n`;
@@ -439,7 +360,6 @@
       }
     },
 
-    // GoDEX (EZPL / TSPL - G500, RT700)
     godex: {
       name: 'GoDEX (EZPL)',
       language: 'EZPL',
@@ -474,7 +394,6 @@
       }
     },
 
-    // HPRT (TSPL / ZPL - HT300, N41, LPQ80)
     hprt: {
       name: 'HPRT (TSPL)',
       language: 'TSPL',
@@ -516,41 +435,16 @@
 
     static get transports() {
       return {
+        LocalAgent: LocalAgentTransport,
         WebSerial: WebSerialTransport,
         WebUSB: WebUSBTransport,
         WebBluetooth: WebBluetoothTransport,
-        Network: NetworkPrinterTransport,
-        LocalAgent: LocalAgentTransport
+        Network: NetworkPrinterTransport
       };
     }
 
     static get generators() {
       return CommandGenerators;
-    }
-
-    // High level method to list accessible devices
-    static async discoverDevices() {
-      const devices = [];
-
-      if (WebSerialTransport.isSupported()) {
-        try {
-          const serials = await WebSerialTransport.getGrantedDevices();
-          serials.forEach(s => devices.push({ type: 'Serial', name: s.name, transport: s }));
-        } catch (e) {
-          console.warn('Error fetching Serial devices', e);
-        }
-      }
-
-      if (WebUSBTransport.isSupported()) {
-        try {
-          const usbs = await WebUSBTransport.getGrantedDevices();
-          usbs.forEach(u => devices.push({ type: 'USB', name: u.name, transport: u }));
-        } catch (e) {
-          console.warn('Error fetching USB devices', e);
-        }
-      }
-
-      return devices;
     }
 
     async connect() {
@@ -559,17 +453,11 @@
       }
     }
 
-    async disconnect() {
-      if (this.transport && typeof this.transport.disconnect === 'function') {
-        await this.transport.disconnect();
-      }
-    }
-
     async print(data) {
       if (!this.transport) {
-        throw new Error('No transport defined for LabelPrinter');
+        throw new Error('Nenhum método de transporte configurado para LabelPrinter');
       }
-      await this.transport.send(data);
+      return await this.transport.send(data);
     }
   }
 

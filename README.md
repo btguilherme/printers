@@ -4,7 +4,33 @@ Solução multiplataforma e 100% no lado do cliente (browser) em JavaScript para
 
 ---
 
-## 🚀 Funcionalidades
+## 🚀 Como Funciona a Listagem de Impressoras do Sistema Operacional
+
+Navegadores web (Chrome, Firefox, Safari) por questões de segurança de sandbox **não possuem permissão nativa direta** para listar as impressoras instaladas no sistema operacional (Windows, Linux, macOS) nem impressoras de rede compartilhadas via spooler do SO sem ação direta do usuário.
+
+Para exibir a **lista de impressoras instaladas no menu dropdown** automaticamente:
+
+### 1. Iniciar o Agente Spooler Local (Incluído no Projeto)
+
+Você pode executar o agente leve de impressão em **Node.js** ou **Python**:
+
+#### Via Node.js:
+```bash
+node agent/server.js
+```
+
+#### Via Python:
+```bash
+python agent/server.py
+```
+
+O agente rodará em `http://127.0.0.1:8182` e irá:
+- Consultar o sistema operacional e listar todas as impressoras (locais e de rede compartilhadas).
+- Enviar comandos RAW (ZPL, TSPL, PPLB, EZPL) diretamente para a fila do spooler de impressão do SO da impressora escolhida no menu.
+
+---
+
+## 💻 Funcionalidades & Interfaces Suportadas
 
 - **Suporte Multi-Marca & Multi-Linguagem:**
   - **Zebra**: ZPL II (`^XA...^XZ`)
@@ -13,17 +39,12 @@ Solução multiplataforma e 100% no lado do cliente (browser) em JavaScript para
   - **GoDEX**: EZPL (`^Q`, `^W`, `AH`, `BA`, `BQ`, `E`)
   - **HPRT**: TSPL (`SIZE`, `GAP`, `SPEED`, `DENSITY`, `BARCODE`)
 
-- **Suporte Multi-Transporte (Comunicação Sem Drivers Obrigatórios):**
-  - **Web Serial API**: Conexão direta com portas COM / USB Serial no navegador (Chrome, Edge, Opera).
-  - **WebUSB API**: Comunicação USB direta com a impressora (Classe 7 / Printer).
-  - **Web Bluetooth API**: Impressão sem fio em impressoras móveis ou de bancada com Bluetooth.
-  - **Rede Direct (TCP / HTTP REST / WebSocket)**: Envio direto via IP da impressora na rede local (porta `9100`).
-  - **Agente Spooler Local (WebSocket Bridge)**: Comunicação com spooler do sistema operacional (Windows, Linux, macOS) para impressoras instaladas no driver do SO.
-
-- **Interface Demo Interativa (`index.html`)**:
-  - Seleção e detecção de impressoras disponíveis.
-  - Seleção de marca da impressora com visualização e edição do código fonte de comandos em tempo real.
-  - Terminal de logs de operações e tratamento de erros.
+- **Métodos de Comunicação:**
+  - **Agente Spooler Local (Recomendado)**: Lista automaticamente as impressoras instaladas no Windows / Linux / macOS em um menu dropdown e imprime via Spooler do SO.
+  - **Web Serial API**: Conexão direta com portas COM / USB Serial no navegador.
+  - **WebUSB API**: Comunicação USB direta de baixa linha com a impressora.
+  - **Web Bluetooth API**: Impressão sem fio via Bluetooth.
+  - **Rede Direct (TCP / HTTP REST)**: Envio direto via IP na porta `9100`.
 
 ---
 
@@ -31,28 +52,29 @@ Solução multiplataforma e 100% no lado do cliente (browser) em JavaScript para
 
 ```
 .
+├── agent/
+│   ├── server.js            # Agente Spooler Local em Node.js (8182)
+│   └── server.py            # Agente Spooler Local em Python (8182)
 ├── css/
-│   └── style.css            # Estilos da interface web de exemplo
+│   └── style.css            # Estilos da interface web
 ├── js/
 │   └── label-printer.js     # Biblioteca principal client-side
 ├── test/
-│   └── label-printer.test.js # Testes unitários em Node.js
-├── index.html               # Aplicação web e exemplo de uso
-└── README.md                # Documentação do projeto
+│   └── label-printer.test.js # Testes unitários
+├── index.html               # Aplicação web com dropdown de impressoras
+└── README.md                # Documentação
 ```
 
 ---
 
-## 🛠️ Como Utilizar no seu Projeto JavaScript
+## 🛠️ Exemplo de Uso em JavaScript
 
-### 1. Incluir a biblioteca no HTML
-```html
-<script src="js/label-printer.js"></script>
-```
-
-### 2. Gerar comandos para a marca desejada
 ```javascript
-// Exemplo: Gerando ZPL para Zebra
+// 1. Listar impressoras instaladas no sistema via Agente
+const impressoras = await LabelPrinter.transports.LocalAgent.discoverPrinters();
+console.log('Impressoras no SO:', impressoras);
+
+// 2. Gerar comando ZPL para Zebra
 const zpl = LabelPrinter.generators.zebra.generateLabel({
   title: 'PRODUTO MODELO A',
   barcode: '7891234567890',
@@ -60,29 +82,9 @@ const zpl = LabelPrinter.generators.zebra.generateLabel({
   details: ['LOTE: 2023-A', 'VAL: 12/2026']
 });
 
-// Exemplo: Gerando TSPL para Elgin ou HPRT
-const tspl = LabelPrinter.generators.elgin.generateLabel({
-  title: 'ETIQUETA ELGIN',
-  barcode: '7891234567890'
-});
-```
-
-### 3. Conectar e Imprimir via Web Serial
-```javascript
-// Solicita permissão do usuário para porta serial/USB
-const serialTransport = await LabelPrinter.transports.WebSerial.requestDevice();
-
-// Cria instância da impressora
-const printer = new LabelPrinter(serialTransport);
-
-// Conecta e envia o código da etiqueta
-await printer.print(zpl);
-```
-
-### 4. Conectar e Imprimir via Rede IP
-```javascript
-const netTransport = new LabelPrinter.transports.Network('192.168.1.200', { port: 9100 });
-const printer = new LabelPrinter(netTransport);
+// 3. Imprimir na Zebra escolhida no dropdown
+const transport = new LabelPrinter.transports.LocalAgent({ printerName: 'Zebra_GK420t' });
+const printer = new LabelPrinter(transport);
 await printer.print(zpl);
 ```
 
@@ -90,20 +92,6 @@ await printer.print(zpl);
 
 ## 🧪 Executando os Testes
 
-Para rodar os testes unitários da biblioteca:
-
 ```bash
 node test/label-printer.test.js
 ```
-
----
-
-## 🌐 Compatibilidade de Navegadores
-
-| Transporte | Chrome / Edge / Opera | Firefox | Safari |
-|---|---|---|---|
-| Web Serial | ✅ Sim | ❌ Não | ❌ Não |
-| WebUSB | ✅ Sim | ❌ Não | ❌ Não |
-| Web Bluetooth | ✅ Sim | ⚠️ Com flag | ✅ iOS / macOS (Parcial) |
-| Rede (HTTP/WS) | ✅ Sim | ✅ Sim | ✅ Sim |
-| Agente Local | ✅ Sim | ✅ Sim | ✅ Sim |
